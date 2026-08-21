@@ -16,6 +16,7 @@ import { Footer } from './components/Footer';
 import { JobCheckForm, EMPTY_SPEC } from './components/JobCheckForm';
 import { JobCheckResults } from './components/JobCheckResults';
 import { VisualPreview } from './components/VisualPreview';
+import { FixEnginePanel } from './components/FixEnginePanel';
 
 import { STANDARD_PROFILES, COMMERCIAL_PRINT_300DPI_PROFILE, ProductionProfile } from './utils/productionProfiles';
 import { runDeterministicRuleEngine } from './utils/ruleEngine';
@@ -187,6 +188,7 @@ export const App: React.FC = () => {
                     analysis={currentAnalysis}
                   />
                 )}
+                <FixEnginePanel analysis={currentAnalysis} />
                 <DiagnosticPanel ruleResults={currentAnalysis.ruleResults} />
                 <AiAssistant analysis={currentAnalysis} />
               </div>
