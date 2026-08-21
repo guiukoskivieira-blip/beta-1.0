@@ -1020,22 +1020,27 @@ async function startServer() {
     });
   }
 
-  const server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`ArteCheck AI Server running on http://0.0.0.0:${PORT}`);
-  });
+  let server: import("net").Server;
 
-  server.on("error", (err: any) => {
-    if (err?.code === "EADDRINUSE") {
-      console.warn(`[SERVER] Warning: Port ${PORT} already in use. Retrying or waiting for release...`);
-      setTimeout(() => {
-        try {
-          server.close();
-        } catch {}
-      }, 1000);
-    } else {
-      console.error("[SERVER] Fatal Server Error:", err);
-    }
-  });
+  const tryListen = (port: number) => {
+    server = app.listen(port, "0.0.0.0", () => {
+      console.log(`ArteCheck AI Server running on http://0.0.0.0:${port}`);
+    });
+    server.on("error", (err: any) => {
+      if (err?.code === "EADDRINUSE" && port - PORT < 50) {
+        console.warn(`[SERVER] Port ${port} in use, trying ${port + 1}...`);
+        try { server.close(); } catch {}
+        tryListen(port + 1);
+      } else if (err?.code === "EADDRINUSE") {
+        console.error("[SERVER] No available port found after 50 attempts.");
+        process.exit(1);
+      } else {
+        console.error("[SERVER] Fatal Server Error:", err);
+      }
+    });
+  };
+
+  tryListen(PORT);
 
   const shutdown = () => {
     try {
