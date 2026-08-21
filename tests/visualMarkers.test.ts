@@ -7,10 +7,14 @@ import assert from 'node:assert/strict';
 import {
   buildDpiMarkersForPage,
   buildAllDpiMarkers,
+  buildAllVisualData,
+  buildDimensionMarkersForPage,
+  buildBleedMarkersForPage,
   pdfCoordsToPreview,
+  mmToPreviewPct,
   type VisualIssueMarker,
 } from '../src/services/visualMarkers';
-import { COMMERCIAL_PRINT_300DPI_PROFILE, LARGE_FORMAT_BANNER_PROFILE } from '../src/utils/productionProfiles';
+import { COMMERCIAL_PRINT_300DPI_PROFILE, LARGE_FORMAT_BANNER_PROFILE, A4_COMMERCIAL_FLYER_PROFILE } from '../src/utils/productionProfiles';
 import type { PdfPageStructure, PdfDocumentStructure, PreflightAnalysis, RuleEngineSummary, ScoreSummary } from '../src/types';
 
 let passed = 0;
@@ -60,6 +64,7 @@ test('Conversão de coordenadas: imagem no canto inferior esquerdo', () => {
   const page = makePage();
   const marker: VisualIssueMarker = {
     page: 1,
+    category: 'dpi',
     x: 0,
     y: 0,
     width: 100,
@@ -87,6 +92,7 @@ test('Conversão de coordenadas: imagem no centro da página', () => {
   const cy = 841.89 / 2;
   const marker: VisualIssueMarker = {
     page: 1,
+    category: 'dpi',
     x: cx - 50,
     y: cy - 50,
     width: 100,
@@ -109,6 +115,7 @@ test('Conversão de coordenadas: imagem no canto superior direito (origem PDF bo
   const page = makePage();
   const marker: VisualIssueMarker = {
     page: 1,
+    category: 'dpi',
     x: 495.28,
     y: 741.89,
     width: 100,
@@ -132,6 +139,7 @@ test('Conversão: retorna null para coordenadas inválidas', () => {
   const page = makePage();
   const marker: VisualIssueMarker = {
     page: 1,
+    category: 'dpi',
     x: undefined as any,
     y: undefined as any,
     width: 100,
@@ -151,6 +159,7 @@ test('Conversão: retorna null para width/height <= 0', () => {
   const page = makePage();
   const marker: VisualIssueMarker = {
     page: 1,
+    category: 'dpi',
     x: 100,
     y: 100,
     width: 0,
@@ -192,6 +201,7 @@ test('Escala do preview: marker cobre metade da página', () => {
   const halfH = page.heightPt / 2;
   const marker: VisualIssueMarker = {
     page: 1,
+    category: 'dpi',
     x: 0,
     y: 0,
     width: halfW,
@@ -389,6 +399,240 @@ test('Marker usa effectiveDpiX/Y do Motor 1 (não recalcula DPI)', () => {
   assert.equal(result.markers.length, 1);
   // measuredValue deve refletir 147 DPI, não recalcular a partir de widthPx/appliedWidthPt
   assert.match(result.markers[0].measuredValue, /147/);
+});
+
+// ============================================================================
+// TESTE 11: DIMENSÃO — marker gerado quando página diverge do perfil
+// ============================================================================
+
+test('DIM: Página 200×300mm com perfil A4 (210×297) gera marker dimension error', () => {
+  const page = makePage({ page: 1, widthMm: 200, heightMm: 300, trimBox: undefined, bleedBox: undefined });
+  const markers = buildDimensionMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(markers.length, 1);
+  assert.equal(markers[0].category, 'dimension');
+  assert.equal(markers[0].severity, 'error');
+  assert.match(markers[0].measuredValue, /200/);
+  assert.match(markers[0].expectedValue, /210/);
+});
+
+test('DIM: Página 210×297mm com perfil A4 não gera marker', () => {
+  const page = makePage({ page: 1, widthMm: 210, heightMm: 297 });
+  const markers = buildDimensionMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(markers.length, 0);
+});
+
+test('DIM: Página 297×210mm (rotacionada) com perfil A4 não gera marker', () => {
+  const page = makePage({ page: 1, widthMm: 297, heightMm: 210 });
+  const markers = buildDimensionMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(markers.length, 0);
+});
+
+test('DIM: Perfil sem dimensões esperadas não gera marker', () => {
+  const page = makePage({ page: 1, widthMm: 100, heightMm: 100 });
+  const markers = buildDimensionMarkersForPage(page, COMMERCIAL_PRINT_300DPI_PROFILE);
+  assert.equal(markers.length, 0);
+});
+
+// ============================================================================
+// TESTE 12: SANGRIA — markers e overlays de caixas técnicas
+// ============================================================================
+
+test('BLD: Página sem TrimBox gera marker undetermined com perfil que exige sangria', () => {
+  const page = makePage({
+    page: 1,
+    trimBox: undefined,
+    bleedBox: undefined,
+  });
+  const result = buildBleedMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.markers.length, 1);
+  assert.equal(result.markers[0].category, 'bleed');
+  assert.equal(result.markers[0].severity, 'undetermined');
+  assert.match(result.markers[0].measuredValue, /Sem TrimBox/);
+});
+
+test('BLD: Página com TrimBox e BleedBox corretos não gera marker de sangria', () => {
+  // makePage has trimBox at 3mm offset and bleedBox at 216×303 — that's 3mm bleed all around
+  const page = makePage();
+  const result = buildBleedMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  const errorMarkers = result.markers.filter((m) => m.severity === 'error');
+  assert.equal(errorMarkers.length, 0, 'Não deve gerar marker de erro para sangria correta');
+});
+
+test('BLD: Página com sangria insuficiente gera marker error', () => {
+  const page = makePage({
+    page: 1,
+    trimBox: { status: 'explicit', xPt: 1, yPt: 1, widthPt: 595.28, heightPt: 841.89, xMm: 0.5, yMm: 0.5, widthMm: 210, heightMm: 297 },
+    bleedBox: { status: 'explicit', xPt: 0, yPt: 0, widthPt: 598, heightPt: 845, xMm: 0, yMm: 0, widthMm: 211, heightMm: 298 },
+  });
+  const result = buildBleedMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  const errorMarkers = result.markers.filter((m) => m.severity === 'error');
+  assert.ok(errorMarkers.length > 0, 'Deve gerar marker de erro para sangria insuficiente');
+  assert.match(errorMarkers[0].measuredValue, /mm/);
+  assert.match(errorMarkers[0].expectedValue, /3/);
+});
+
+test('BLD: Perfil sem exigência de sangria não gera marker nem overlays', () => {
+  const page = makePage();
+  const result = buildBleedMarkersForPage(page, LARGE_FORMAT_BANNER_PROFILE);
+  assert.equal(result.markers.length, 0);
+  assert.equal(result.overlays.length, 0);
+});
+
+test('BLD: Overlays incluem MediaBox, TrimBox, BleedBox quando explícitos', () => {
+  const page = makePage();
+  const result = buildBleedMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  const types = result.overlays.map((o) => o.type);
+  assert.ok(types.includes('mediaBox'), 'Deve incluir overlay mediaBox');
+  assert.ok(types.includes('trimBox'), 'Deve incluir overlay trimBox');
+  assert.ok(types.includes('bleedBox'), 'Deve incluir overlay bleedBox');
+});
+
+test('BLD: Overlays incluem expectedTrim e expectedBleed quando perfil tem dimensões', () => {
+  const page = makePage();
+  const result = buildBleedMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  const types = result.overlays.map((o) => o.type);
+  assert.ok(types.includes('expectedTrim'), 'Deve incluir overlay expectedTrim');
+  assert.ok(types.includes('expectedBleed'), 'Deve incluir overlay expectedBleed');
+});
+
+test('BLD: Overlay expectedBleed tem dimensões = expectedTrim + 2×bleed', () => {
+  const page = makePage();
+  const result = buildBleedMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  const eb = result.overlays.find((o) => o.type === 'expectedBleed');
+  assert.ok(eb);
+  // A4: 210+6=216, 297+6=303
+  assert.ok(Math.abs(eb!.widthMm - 216) < 0.1, `expectedBleed width deveria ser ~216, foi ${eb!.widthMm}`);
+  assert.ok(Math.abs(eb!.heightMm - 303) < 0.1, `expectedBleed height deveria ser ~303, foi ${eb!.heightMm}`);
+});
+
+// ============================================================================
+// TESTE 13: EVIDÊNCIA INSUFICIENTE — não inventa posição
+// ============================================================================
+
+test('BLD: MediaBox com status fallback marca insufficientEvidence', () => {
+  const page = makePage({
+    mediaBox: { status: 'fallback', xPt: 0, yPt: 0, widthPt: 595.28, heightPt: 841.89, xMm: 0, yMm: 0, widthMm: 210, heightMm: 297 },
+  });
+  const result = buildBleedMarkersForPage(page, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.insufficientEvidence, true);
+});
+
+// ============================================================================
+// TESTE 14: buildAllVisualData agrega todas as categorias
+// ============================================================================
+
+test('buildAllVisualData: agrega markers de DPI, dimensão e sangria', () => {
+  const doc: PdfDocumentStructure = {
+    pageCount: 2,
+    pages: [
+      makePage({
+        page: 1,
+        widthMm: 200,
+        heightMm: 300,
+        trimBox: undefined,
+        bleedBox: undefined,
+        imageOccurrences: [
+          { id: 'img1', page: 1, widthPx: 100, heightPx: 100, displayWidthMm: 200, displayHeightMm: 200, effectiveDpiX: 72, effectiveDpiY: 72, colorSpace: 'DeviceCMYK', xPt: 50, yPt: 50, appliedWidthPt: 200, appliedHeightPt: 200 },
+        ],
+      }),
+      makePage({
+        page: 2,
+        widthMm: 210,
+        heightMm: 297,
+        trimBox: undefined,
+        bleedBox: undefined,
+      }),
+    ],
+    fonts: [],
+    colorSummary: { hasRgb: false, hasCmyk: true, hasSpotColors: false, familiesDetected: ['DeviceCMYK'] },
+    pdfxInfo: { isDeclaredPdfX: false },
+  };
+  const result = buildAllVisualData(doc, A4_COMMERCIAL_FLYER_PROFILE);
+  // Page 1: 1 DPI marker + 1 dimension marker + 1 bleed marker = 3
+  // Page 2: 0 DPI + 0 dimension (correct) + 1 bleed (no TrimBox) = 1
+  assert.ok(result.allMarkers.length >= 3, `Deve ter pelo menos 3 markers, teve ${result.allMarkers.length}`);
+
+  const categories = new Set(result.allMarkers.map((m) => m.category));
+  assert.ok(categories.has('dpi'), 'Deve incluir markers de DPI');
+  assert.ok(categories.has('dimension'), 'Deve incluir markers de dimensão');
+  assert.ok(categories.has('bleed'), 'Deve incluir markers de sangria');
+});
+
+test('buildAllVisualData: pageData contém dados por página com overlays', () => {
+  const doc: PdfDocumentStructure = {
+    pageCount: 1,
+    pages: [makePage({ page: 1 })],
+    fonts: [],
+    colorSummary: { hasRgb: false, hasCmyk: true, hasSpotColors: false, familiesDetected: ['DeviceCMYK'] },
+    pdfxInfo: { isDeclaredPdfX: false },
+  };
+  const result = buildAllVisualData(doc, A4_COMMERCIAL_FLYER_PROFILE);
+  const pd = result.pageData.get(1);
+  assert.ok(pd, 'pageData deve ter entrada para página 1');
+  assert.ok(pd!.boxOverlays.length > 0, 'pageData deve ter boxOverlays');
+  assert.equal(pd!.insufficientEvidence, false);
+});
+
+// ============================================================================
+// TESTE 15: NAVEGAÇÃO — markers ordenados por página e categoria
+// ============================================================================
+
+test('NAV: buildAllVisualData retorna markers para navegação sequencial', () => {
+  const doc: PdfDocumentStructure = {
+    pageCount: 3,
+    pages: [
+      makePage({ page: 1, imageOccurrences: [
+        { id: 'img1', page: 1, widthPx: 100, heightPx: 100, displayWidthMm: 200, displayHeightMm: 200, effectiveDpiX: 72, effectiveDpiY: 72, colorSpace: 'DeviceCMYK', xPt: 50, yPt: 50, appliedWidthPt: 200, appliedHeightPt: 200 },
+      ]}),
+      makePage({
+        page: 2,
+        widthMm: 200,
+        heightMm: 300,
+        trimBox: undefined,
+        bleedBox: undefined,
+      }),
+      makePage({ page: 3, trimBox: undefined, bleedBox: undefined }),
+    ],
+    fonts: [],
+    colorSummary: { hasRgb: false, hasCmyk: true, hasSpotColors: false, familiesDetected: ['DeviceCMYK'] },
+    pdfxInfo: { isDeclaredPdfX: false },
+  };
+  const result = buildAllVisualData(doc, A4_COMMERCIAL_FLYER_PROFILE);
+  // Should have markers from all 3 pages
+  const pages = new Set(result.allMarkers.map((m) => m.page));
+  assert.ok(pages.has(1));
+  assert.ok(pages.has(2));
+  assert.ok(pages.has(3));
+  // Navigation count = total markers
+  assert.ok(result.allMarkers.length >= 3, 'Deve ter pelo menos 3 problemas para navegação');
+});
+
+// ============================================================================
+// TESTE 16: mmToPreviewPct — conversão de mm para preview
+// ============================================================================
+
+test('mmToPreviewPct: box cobrindo página inteira = 100%', () => {
+  const page = makePage();
+  const coords = mmToPreviewPct({ xMm: 0, yMm: 0, widthMm: 210, heightMm: 297 }, page);
+  assert.ok(coords);
+  assert.ok(Math.abs(coords!.widthPct - 100) < 1, `widthPct deveria ser ~100, foi ${coords!.widthPct}`);
+  assert.ok(Math.abs(coords!.heightPct - 100) < 1, `heightPct deveria ser ~100, foi ${coords!.heightPct}`);
+});
+
+test('mmToPreviewPct: box no centro da página', () => {
+  const page = makePage();
+  // 100×100mm box centered in 210×297 page
+  const xMm = (210 - 100) / 2;
+  const yMm = (297 - 100) / 2;
+  const coords = mmToPreviewPct({ xMm, yMm, widthMm: 100, heightMm: 100 }, page);
+  assert.ok(coords);
+  assert.ok(coords!.leftPct > 20 && coords!.leftPct < 35, `leftPct deveria ser ~28, foi ${coords!.leftPct}`);
+});
+
+test('mmToPreviewPct: retorna null para página com dimensão zero', () => {
+  const page = makePage({ widthMm: 0, heightMm: 0 });
+  const coords = mmToPreviewPct({ xMm: 0, yMm: 0, widthMm: 100, heightMm: 100 }, page);
+  assert.equal(coords, null);
 });
 
 // ============================================================================
