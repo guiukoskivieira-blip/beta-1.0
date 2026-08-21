@@ -570,6 +570,46 @@ testAsync('ESTRUTURAL N: Nenhuma outra correção automática é executada', asy
 });
 
 // ============================================================================
+// REGRESSÃO: PDF real retornado não contém /Type /XRef (xref stream)
+// Este teste inspeciona os bytes reais retornados pelo mesmo caminho de código
+// usado pelo endpoint /api/fix-trim-bleed — não apenas a função isolada.
+// ============================================================================
+
+testAsync('REGRESSÃO: PDF retornado por applyTrimBleedFix NÃO contém /Type /XRef', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  // This is the exact same call chain the server endpoint uses:
+  // server.ts line 861: const result = await applyTrimBleedFix(file.buffer, doc, profile);
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true, 'Correção deve ter sucesso');
+
+  const bytes = result.pdfBytes!;
+  const str = Buffer.from(bytes).toString('latin1');
+
+  // Must NOT contain xref stream marker
+  assert.equal(/\/Type\s*\/XRef/.test(str), false, 'PDF não deve conter /Type /XRef (xref stream)');
+
+  // Must contain traditional xref table
+  assert.ok(/\nxref\s/.test(str), 'PDF deve conter xref table tradicional');
+  assert.ok(/\ntrailer\s/.test(str), 'PDF deve conter trailer');
+  assert.ok(/\nstartxref\s+\d+/.test(str), 'PDF deve conter startxref');
+  assert.match(str.substring(str.length - 30), /%%EOF/, 'PDF deve terminar com %%EOF');
+  assert.equal(str.substring(0, 5), '%PDF-', 'PDF deve começar com %PDF-');
+});
+
+testAsync('REGRESSÃO: structuralValidation confirma xref tradicional no PDF real', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  assert.ok(result.structuralValidation, 'structuralValidation deve estar presente');
+  assert.equal(result.structuralValidation.valid, true, 'Validação estrutural deve passar');
+  assert.equal(result.structuralValidation.checks.xrefOrTrailer, true, 'xref/trailer deve ser detectado');
+  assert.equal(result.structuralValidation.checks.header, true, 'Header deve ser válido');
+  assert.equal(result.structuralValidation.checks.eof, true, 'EOF deve ser válido');
+});
+
+// ============================================================================
 // RELATÓRIO
 // ============================================================================
 
@@ -582,6 +622,6 @@ const originalTestAsync = testAsync;
 // Wait for all async tests, then report
 setTimeout(() => {
   console.log(`\n  Fix Engine V2: ${passed}/${passed + failed} aprovados${failed > 0 ? `, ${failed} falhas` : ''}`);
-}, 3000);
+}, 5000);
 
 export { passed as fixV2Passed, failed as fixV2Failed };
