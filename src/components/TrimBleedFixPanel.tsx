@@ -21,6 +21,7 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
   const [validated, setValidated] = useState<boolean>(false);
   const [structuralValid, setStructuralValid] = useState<boolean>(false);
   const [fixedPdfBlob, setFixedPdfBlob] = useState<Blob | null>(null);
+  const [backendVersion, setBackendVersion] = useState<string>('');
 
   const bleedRule = useMemo(() => {
     return analysis.ruleResults.results.find((r) => r.ruleId === 'RULE-PROF-BLD-001');
@@ -86,6 +87,7 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
 
       const structureOk = response.structuralValidation?.valid ?? false;
       setStructuralValid(structureOk);
+      setBackendVersion(response.backendVersion || response.serializationMode || '');
 
       if (response.revalidation) {
         setRevalidationMessage(response.revalidation.message);
@@ -133,6 +135,7 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
     setValidated(false);
     setStructuralValid(false);
     setFixedPdfBlob(null);
+    setBackendVersion('');
   }, []);
 
   // Don't render if bleed rule is approved or not present
@@ -391,6 +394,9 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
               Recomeçar
             </button>
           </div>
+          {backendVersion && (
+            <p className="text-[10px] text-[#4A5568] mt-3">Backend: {backendVersion}</p>
+          )}
         </div>
       )}
 

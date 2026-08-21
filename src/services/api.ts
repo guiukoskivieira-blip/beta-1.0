@@ -183,6 +183,8 @@ export interface TrimBleedFixApiResponse {
     validated: boolean;
     message: string;
   };
+  backendVersion?: string;
+  serializationMode?: string;
   error?: string;
 }
 

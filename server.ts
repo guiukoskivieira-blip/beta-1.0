@@ -849,11 +849,15 @@ async function startServer() {
       const doc = await extractPdfStructure(file.buffer);
       const eligibility = checkTrimBleedEligibility(doc, profile);
 
+      res.setHeader("X-ArteCheck-Backend-Version", "trim-fix-xref-v2");
+
       if (!eligibility.eligible) {
         return res.json({
           success: false,
           eligible: false,
           eligibility,
+          backendVersion: "trim-fix-xref-v2",
+          serializationMode: "traditional-xref",
           error: eligibility.globalReason,
         });
       }
@@ -868,6 +872,8 @@ async function startServer() {
           audit: result.audit,
           structuralValidation: result.structuralValidation,
           revalidation: result.revalidation,
+          backendVersion: "trim-fix-xref-v2",
+          serializationMode: "traditional-xref",
           error: result.error,
         });
       }
@@ -884,10 +890,14 @@ async function startServer() {
         audit: result.audit,
         structuralValidation: result.structuralValidation,
         revalidation: result.revalidation,
+        backendVersion: "trim-fix-xref-v2",
+        serializationMode: "traditional-xref",
       });
     } catch (error: any) {
       return res.status(400).json({
         success: false,
+        backendVersion: "trim-fix-xref-v2",
+        serializationMode: "traditional-xref",
         error: error?.message || "Falha ao aplicar correção TrimBox/BleedBox.",
       });
     }

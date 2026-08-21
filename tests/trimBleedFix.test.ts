@@ -609,6 +609,21 @@ testAsync('REGRESSÃO: structuralValidation confirma xref tradicional no PDF rea
   assert.equal(result.structuralValidation.checks.eof, true, 'EOF deve ser válido');
 });
 
+testAsync('REGRESSÃO: PDF com useObjectStreams=false nunca contém /Type /XRef em múltiplas páginas', async () => {
+  const doc1 = await PDFDocument.create();
+  for (let i = 0; i < 5; i++) {
+    const page = doc1.addPage([216 * MM_TO_PT, 303 * MM_TO_PT]);
+    page.drawText(`Page ${i + 1}`, { x: 50, y: 50, size: 12 });
+  }
+  const pdfBytes = await doc1.save();
+  const extracted = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, extracted, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const str = Buffer.from(result.pdfBytes!).toString('latin1');
+  assert.equal(/\/Type\s*\/XRef/.test(str), false, 'PDF multi-página não deve conter /Type /XRef');
+  assert.ok(/\nxref\s/.test(str), 'PDF multi-página deve conter xref table tradicional');
+});
+
 // ============================================================================
 // RELATÓRIO
 // ============================================================================
