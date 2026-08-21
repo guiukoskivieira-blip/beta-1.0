@@ -15,6 +15,7 @@ import { PlansModal } from './components/PlansModal';
 import { Footer } from './components/Footer';
 import { JobCheckForm, EMPTY_SPEC } from './components/JobCheckForm';
 import { JobCheckResults } from './components/JobCheckResults';
+import { VisualPreview } from './components/VisualPreview';
 
 import { STANDARD_PROFILES, COMMERCIAL_PRINT_300DPI_PROFILE, ProductionProfile } from './utils/productionProfiles';
 import { runDeterministicRuleEngine } from './utils/ruleEngine';
@@ -178,6 +179,7 @@ export const App: React.FC = () => {
             ) : currentAnalysis ? (
               <div>
                 <OperationalSummary analysis={currentAnalysis} />
+                <VisualPreview analysis={currentAnalysis} profile={selectedProfile} />
                 {jobCheckResult && (
                   <JobCheckResults
                     result={jobCheckResult}

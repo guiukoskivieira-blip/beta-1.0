@@ -86,6 +86,8 @@ export interface PdfImageOccurrence {
   rotationDeg?: number;
   ctm?: number[];
   filter?: string;
+  xPt?: number;
+  yPt?: number;
 }
 
 export interface PdfFontItem {

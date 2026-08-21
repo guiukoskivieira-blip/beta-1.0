@@ -1,5 +1,5 @@
 import { PDFDocument, PDFName, PDFDict, PDFArray, PDFNumber, PDFStream, PDFRawStream } from 'pdf-lib';
-import pako from 'pako';
+import * as pako from 'pako';
 import type {
   PdfDocumentStructure,
   PdfPageStructure,
@@ -102,7 +102,147 @@ export function inspectPayload(obj: any): {
 
 const PT_TO_MM = 25.4 / 72.0;
 
+function decodeStream(stream: any): Uint8Array | null {
+  if (stream instanceof PDFRawStream) {
+    const dict = stream.dict;
+    const filter = dict.get(PDFName.of('Filter'));
+    const filterStr = filter?.toString() || '';
+    const rawBytes = stream.contents;
+    if (!rawBytes || rawBytes.length === 0) return null;
+    if (filterStr.includes('FlateDecode') || filterStr === '/FlateDecode') {
+      try { return pako.inflate(rawBytes); } catch { return null; }
+    }
+    return rawBytes;
+  }
+  if (stream instanceof PDFStream) {
+    const filter = stream.dict.get(PDFName.of('Filter'));
+    const filterStr = filter?.toString() || '';
+    const rawBytes = stream.getContents();
+    if (!rawBytes || rawBytes.length === 0) return null;
+    if (filterStr.includes('FlateDecode') || filterStr === '/FlateDecode') {
+      try { return pako.inflate(rawBytes); } catch { return null; }
+    }
+    return rawBytes;
+  }
+  return null;
+}
+
+interface ImagePlacement {
+  name: string;
+  xPt: number;
+  yPt: number;
+  appliedWidthPt: number;
+  appliedHeightPt: number;
+  ctm: number[];
+}
+
+function parseImagePlacements(contentBytes: Uint8Array): Map<string, ImagePlacement> {
+  const placements = new Map<string, ImagePlacement>();
+  const text = Buffer.from(contentBytes).toString('latin1');
+  const tokens: string[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '/' || ch === '(') {
+      if (ch === '/') {
+        let name = '/';
+        i++;
+        while (i < text.length && /[A-Za-z0-9_+\-.]/.test(text[i])) { name += text[i]; i++; }
+        tokens.push(name);
+      } else {
+        let str = '(';
+        i++;
+        let depth = 1;
+        while (i < text.length && depth > 0) {
+          if (text[i] === '\\') { str += text[i] + (text[i+1] || ''); i += 2; }
+          else { if (text[i] === '(') depth++; if (text[i] === ')') depth--; str += text[i]; i++; }
+        }
+        tokens.push(str);
+      }
+    } else if (ch === '[') {
+      let arr = '[';
+      i++;
+      while (i < text.length && text[i] !== ']') { arr += text[i]; i++; }
+      arr += ']';
+      tokens.push(arr); i++;
+    } else if (/\s/.test(ch)) {
+      i++;
+    } else if (/[\d.\-+]/.test(ch)) {
+      let num = '';
+      while (i < text.length && /[\d.\-+eE]/.test(text[i])) { num += text[i]; i++; }
+      if (num && !/[a-zA-Z]/.test(num)) tokens.push(num);
+    } else if (/[A-Za-z'"<>{}]/.test(ch)) {
+      let op = '';
+      while (i < text.length && /[A-Za-z'"<>{}]/.test(text[i])) { op += text[i]; i++; }
+      tokens.push(op);
+    } else {
+      i++;
+    }
+  }
+
+  let stack: number[] = [];
+  let pendingMatrix: number[] | null = null;
+  let matrixStack: number[][] = [];
+  const identity = [1, 0, 0, 1, 0, 0];
+  let currentMatrix = [...identity];
+
+  function multiply(a: number[], b: number[]): number[] {
+    return [
+      a[0]*b[0] + a[1]*b[2],
+      a[0]*b[1] + a[1]*b[3],
+      a[2]*b[0] + a[3]*b[2],
+      a[2]*b[1] + a[3]*b[3],
+      a[4]*b[0] + a[5]*b[2] + b[4],
+      a[4]*b[1] + a[5]*b[3] + b[5],
+    ];
+  }
+
+  for (let t = 0; t < tokens.length; t++) {
+    const tok = tokens[t];
+    if (/^-?\d+(\.\d+)?$/.test(tok)) {
+      stack.push(parseFloat(tok));
+      continue;
+    }
+    if (tok === 'cm') {
+      if (stack.length >= 6) {
+        const m = stack.splice(-6);
+        currentMatrix = multiply(currentMatrix, m);
+      }
+      continue;
+    }
+    if (tok === 'q') { matrixStack.push([...currentMatrix]); continue; }
+    if (tok === 'Q') { currentMatrix = matrixStack.pop() || [...identity]; continue; }
+    if (tok === 'Do') {
+      if (stack.length === 0 && t > 0) {
+        const prev = tokens[t - 1];
+        if (prev && prev.startsWith('/')) {
+          const name = prev.slice(1);
+          const m = currentMatrix;
+          if (!placements.has(name)) {
+            placements.set(name, {
+              name,
+              xPt: m[4],
+              yPt: m[5],
+              appliedWidthPt: Math.abs(m[0]),
+              appliedHeightPt: Math.abs(m[3]),
+              ctm: [...m],
+            });
+          }
+        }
+      }
+      stack = [];
+      continue;
+    }
+    if (tok.length > 0 && /[A-Za-z]/.test(tok[0]) && tok !== 'cm' && tok !== 'q' && tok !== 'Q' && tok !== 'Do') {
+      stack = [];
+    }
+  }
+
+  return placements;
+}
+
 function parseBox(boxArray: any): PdfBoxInfo | undefined {
+
   if (!boxArray || !Array.isArray(boxArray) || boxArray.length < 4) return undefined;
   const x1 = typeof boxArray[0] === 'number' ? boxArray[0] : 0;
   const y1 = typeof boxArray[1] === 'number' ? boxArray[1] : 0;
@@ -178,6 +318,39 @@ export async function extractPdfStructure(pdfBuffer: Buffer): Promise<PdfDocumen
     const imageOccurrences: PdfImageOccurrence[] = [];
     const colorOccurrences: PdfColorOccurrence[] = [];
 
+    // Parse content stream for image placement coordinates
+    let imagePlacements = new Map<string, ImagePlacement>();
+    try {
+      const contentStreamRefs = page.node.Contents();
+      if (contentStreamRefs) {
+        let contentBytes: Uint8Array | null = null;
+        if (contentStreamRefs instanceof PDFArray) {
+          const parts: Uint8Array[] = [];
+          for (let c = 0; c < contentStreamRefs.size(); c++) {
+            const streamRef = contentStreamRefs.get(c);
+            const stream = pdfDoc.context.lookup(streamRef);
+            const decoded = decodeStream(stream);
+            if (decoded) parts.push(decoded);
+          }
+          if (parts.length > 0) {
+            const total = parts.reduce((s, p) => s + p.length, 0);
+            const combined = new Uint8Array(total);
+            let off = 0;
+            for (const p of parts) { combined.set(p, off); off += p.length; }
+            contentBytes = combined;
+          }
+        } else {
+          const stream = pdfDoc.context.lookup(contentStreamRefs);
+          contentBytes = decodeStream(stream);
+        }
+        if (contentBytes) {
+          imagePlacements = parseImagePlacements(contentBytes);
+        }
+      }
+    } catch {
+      // Content stream parsing is best-effort; if it fails we just don't have coordinates
+    }
+
     // Extract resources
     const resources = page.node.Resources();
     let hasTransparency = false;
@@ -205,14 +378,22 @@ export async function extractPdfStructure(pdfBuffer: Buffer): Promise<PdfDocumen
                 detectedFamilies.add('DeviceCMYK');
               }
 
-              // Calculate display size and DPI
-              const displayWidthMm = widthMm;
-              const displayHeightMm = heightMm;
-              const effectiveDpiX = Number(((widthPx / (widthPt / 72.0))).toFixed(1));
-              const effectiveDpiY = Number(((heightPx / (heightPt / 72.0))).toFixed(1));
-
               const rawName = typeof nameKey.asString === 'function' ? nameKey.asString() : (nameKey.value || String(nameKey));
               const imgName = typeof rawName === 'string' ? rawName : String(rawName);
+
+              // Look up placement from content stream
+              const placement = imagePlacements.get(imgName);
+              const appliedWidthPt = placement?.appliedWidthPt;
+              const appliedHeightPt = placement?.appliedHeightPt;
+
+              // Calculate display size and DPI
+              // Use applied dimensions from content stream if available, otherwise fall back to page size
+              const dispWidthPt = appliedWidthPt && appliedWidthPt > 0 ? appliedWidthPt : widthPt;
+              const dispHeightPt = appliedHeightPt && appliedHeightPt > 0 ? appliedHeightPt : heightPt;
+              const displayWidthMm = Number((dispWidthPt * PT_TO_MM).toFixed(2));
+              const displayHeightMm = Number((dispHeightPt * PT_TO_MM).toFixed(2));
+              const effectiveDpiX = Number(((widthPx / (dispWidthPt / 72.0))).toFixed(1));
+              const effectiveDpiY = Number(((heightPx / (dispHeightPt / 72.0))).toFixed(1));
 
               imageOccurrences.push({
                 id: imgName || `img_${pageNum}_${imageOccurrences.length + 1}`,
@@ -225,6 +406,11 @@ export async function extractPdfStructure(pdfBuffer: Buffer): Promise<PdfDocumen
                 effectiveDpiX: effectiveDpiX > 0 ? effectiveDpiX : 300,
                 effectiveDpiY: effectiveDpiY > 0 ? effectiveDpiY : 300,
                 colorSpace,
+                appliedWidthPt,
+                appliedHeightPt,
+                xPt: placement?.xPt,
+                yPt: placement?.yPt,
+                ctm: placement?.ctm,
               });
             }
           }
