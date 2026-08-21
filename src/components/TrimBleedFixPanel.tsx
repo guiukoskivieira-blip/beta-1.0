@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback } from 'react';
-import { Scissors, ShieldCheck, CircleCheck as CheckCircle2, TriangleAlert as AlertTriangle, Download, X, Eye, Loader as Loader2, RefreshCw } from 'lucide-react';
+import { Scissors, ShieldCheck, CircleCheck as CheckCircle2, TriangleAlert as AlertTriangle, Download, X, Eye, Loader as Loader2, RefreshCw, Ban } from 'lucide-react';
 import type { PreflightAnalysis } from '../types';
 import type { ProductionProfile } from '../utils/productionProfiles';
 import { checkTrimBleedEligibility, buildPreviewData, type TrimBleedEligibilityResult, type PreviewData } from '../services/trimBleedFix';
@@ -15,7 +15,6 @@ type Phase = 'idle' | 'preview' | 'applying' | 'applied' | 'cancelled' | 'error'
 
 export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, profile, originalFile }) => {
   const [phase, setPhase] = useState<Phase>('idle');
-  const [eligibility, setEligibility] = useState<TrimBleedEligibilityResult | null>(null);
   const [previewData, setPreviewData] = useState<PreviewData | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [revalidationMessage, setRevalidationMessage] = useState<string>('');
@@ -31,23 +30,26 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
     return bleedRule.status === 'error' || bleedRule.status === 'undetermined' || bleedRule.status === 'warning';
   }, [bleedRule]);
 
-  const canCheckEligibility = useMemo(() => {
-    return isRelevant && profile.expectedBleedMm && profile.expectedBleedMm > 0 && profile.expectedWidthMm && profile.expectedHeightMm;
-  }, [isRelevant, profile]);
+  const profileHasDimensions = !!(
+    profile.expectedBleedMm && profile.expectedBleedMm > 0 &&
+    profile.expectedWidthMm && profile.expectedHeightMm
+  );
+
+  // Compute eligibility synchronously so it's available on first render (including SSR)
+  const eligibility = useMemo<TrimBleedEligibilityResult | null>(() => {
+    if (!isRelevant) return null;
+    if (!profileHasDimensions) return null;
+    return checkTrimBleedEligibility(analysis.document, profile);
+  }, [analysis, profile, isRelevant, profileHasDimensions]);
 
   const handlePrepareFix = useCallback(() => {
-    const result = checkTrimBleedEligibility(analysis.document, profile);
-    setEligibility(result);
-
-    if (result.eligible && result.pages.length > 0) {
-      const firstPage = analysis.document.pages[0];
-      const pd = buildPreviewData(firstPage, result.pages[0]);
-      setPreviewData(pd);
-      setPhase('preview');
-    } else {
-      setPhase('idle');
-    }
-  }, [analysis, profile]);
+    if (!eligibility || !eligibility.eligible) return;
+    const firstPage = analysis.document.pages[0];
+    if (!firstPage) return;
+    const pd = buildPreviewData(firstPage, eligibility.pages[0]);
+    setPreviewData(pd);
+    setPhase('preview');
+  }, [analysis, eligibility]);
 
   const handleApplyFix = useCallback(async () => {
     if (!originalFile) {
@@ -106,7 +108,6 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
 
   const handleReset = useCallback(() => {
     setPhase('idle');
-    setEligibility(null);
     setPreviewData(null);
     setErrorMessage('');
     setRevalidationMessage('');
@@ -114,10 +115,10 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
     setFixedPdfBlob(null);
   }, []);
 
-  // Don't render if bleed rule is approved or not relevant
-  if (!isRelevant || phase === 'idle' && !canCheckEligibility) {
-    if (!isRelevant) return null;
-  }
+  // Don't render if bleed rule is approved or not present
+  if (!isRelevant) return null;
+
+  const isEligible = eligibility?.eligible === true;
 
   return (
     <div className="bg-[#101722] border border-[#243244] rounded-2xl p-6 shadow-xl mb-8">
@@ -136,14 +137,63 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
         </div>
       </div>
 
-      {/* Idle state: show eligibility check button */}
+      {/* Idle state */}
       {phase === 'idle' && (
         <div className="mt-5">
-          {eligibility && !eligibility.eligible ? (
-            <div className="flex items-start space-x-2.5 p-4 rounded-xl bg-[#FF4D4D]/5 border border-[#FF4D4D]/20">
-              <AlertTriangle className="w-4 h-4 text-[#FF4D4D] shrink-0 mt-0.5" />
+          {/* Profile without dimensions */}
+          {!profileHasDimensions && (
+            <div className="flex items-start space-x-2.5 p-4 rounded-xl bg-[#FFB800]/5 border border-[#FFB800]/20">
+              <Ban className="w-4 h-4 text-[#FFB800] shrink-0 mt-0.5" />
               <div>
-                <p className="text-sm text-[#FF4D4D] font-medium">Correção não elegível</p>
+                <p className="text-sm text-[#FFB800] font-medium">Correção automática indisponível</p>
+                <p className="text-xs text-[#A6B4C9] mt-1">
+                  O perfil selecionado ("{profile.name}") não define formato final (largura e altura) e sangria.
+                  Não é possível calcular TrimBox deterministicamente. Selecione um perfil com dimensões definidas
+                  (ex: "Folheto Comercial A4") ou configure um perfil personalizado.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Eligible state */}
+          {profileHasDimensions && isEligible && (
+            <>
+              <div className="flex items-start space-x-2.5 p-4 rounded-xl bg-[#00D18F]/5 border border-[#00D18F]/20 mb-4">
+                <CheckCircle2 className="w-4 h-4 text-[#00D18F] shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm text-[#00D18F] font-medium">Correção elegível</p>
+                  <p className="text-xs text-[#A6B4C9] mt-1">
+                    O MediaBox contém área suficiente para definir TrimBox e BleedBox deterministicamente,
+                    sem alterar o conteúdo gráfico. Um novo arquivo PDF será gerado.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-start space-x-2.5 p-3 rounded-xl bg-[#FFB800]/5 border border-[#FFB800]/20 mb-4">
+                <ShieldCheck className="w-4 h-4 text-[#FFB800] shrink-0 mt-0.5" />
+                <p className="text-xs text-[#A6B4C9]">
+                  Esta correção altera <span className="text-white font-medium">somente as caixas técnicas</span> do PDF.
+                  O conteúdo gráfico não será modificado.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handlePrepareFix}
+                className="inline-flex items-center px-5 py-2.5 rounded-xl text-sm font-medium bg-[#007BFF]/15 border border-[#007BFF]/40 text-[#007BFF] hover:bg-[#007BFF]/25 cursor-pointer transition-all"
+              >
+                <Eye className="w-4 h-4 mr-2" />
+                Preparar correção
+              </button>
+            </>
+          )}
+
+          {/* Not eligible state (profile has dimensions but MediaBox is insufficient) */}
+          {profileHasDimensions && !isEligible && eligibility && (
+            <div className="flex items-start space-x-2.5 p-4 rounded-xl bg-[#FF4D4D]/5 border border-[#FF4D4D]/20">
+              <Ban className="w-4 h-4 text-[#FF4D4D] shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm text-[#FF4D4D] font-medium">Correção automática indisponível</p>
                 <p className="text-xs text-[#A6B4C9] mt-1">{eligibility.globalReason}</p>
                 {eligibility.pages.map((p) => (
                   !p.eligible ? (
@@ -152,34 +202,12 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
                     </p>
                   ) : null
                 ))}
+                <p className="text-xs text-[#A6B4C9] mt-2">
+                  A sangria deve ser parte da arte original. Não é possível inventar conteúdo de borda.
+                  Reexporte o arquivo com sangria configurada no software de origem.
+                </p>
               </div>
             </div>
-          ) : (
-            <div className="flex items-start space-x-2.5 p-3 rounded-xl bg-[#FFB800]/5 border border-[#FFB800]/20 mb-4">
-              <ShieldCheck className="w-4 h-4 text-[#FFB800] shrink-0 mt-0.5" />
-              <p className="text-xs text-[#A6B4C9]">
-                Esta correção altera <span className="text-white font-medium">somente as caixas técnicas</span> do PDF.
-                O conteúdo gráfico não será modificado. Um novo arquivo será gerado.
-              </p>
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={handlePrepareFix}
-            disabled={!canCheckEligibility}
-            className={`inline-flex items-center px-5 py-2.5 rounded-xl text-sm font-medium transition-all ${
-              canCheckEligibility
-                ? 'bg-[#007BFF]/15 border border-[#007BFF]/40 text-[#007BFF] hover:bg-[#007BFF]/25 cursor-pointer'
-                : 'bg-[#1A2332] border border-[#243244] text-[#6B778C] cursor-not-allowed'
-            }`}
-          >
-            <Eye className="w-4 h-4 mr-2" />
-            Verificar elegibilidade
-          </button>
-          {!canCheckEligibility && (
-            <p className="text-xs text-[#6B778C] mt-2">
-              O perfil selecionado não define formato e sangria — não é possível calcular TrimBox deterministicamente.
-            </p>
           )}
         </div>
       )}
@@ -370,7 +398,6 @@ interface BoxPreviewProps {
 }
 
 const BoxPreview: React.FC<BoxPreviewProps> = ({ mediaBox, trimBox, bleedBox, label, highlightChanges }) => {
-  // Convert PDF coordinates to percentage-based preview
   const mbX = mediaBox.x;
   const mbY = mediaBox.y;
   const mbW = mediaBox.width;
