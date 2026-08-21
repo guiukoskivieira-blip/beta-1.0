@@ -6,6 +6,9 @@ import { createServer as createViteServer } from "vite";
 import { randomUUID } from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { extractPdfStructure, inspectPayload, DiagnosticTracker, formatBytes } from "./server/pdfExtractor";
+import { checkTrimBleedEligibility, applyTrimBleedFix } from "./src/services/trimBleedFix";
+import { COMMERCIAL_PRINT_300DPI_PROFILE, A4_COMMERCIAL_FLYER_PROFILE, LARGE_FORMAT_BANNER_PROFILE } from "./src/utils/productionProfiles";
+import type { ProductionProfile } from "./src/utils/productionProfiles";
 import { GoogleGenAI } from "@google/genai";
 import { LIMITS } from "./src/config/limits";
 import { getSupabaseClient, isSupabaseConfigured } from "./src/lib/supabaseClient";
@@ -797,6 +800,70 @@ async function startServer() {
         totalTimeMs: Number((performance.now() - started).toFixed(2)),
         lastCompletedStage: "extractor_failed",
         error: error?.message || "Falha no diagnóstico.",
+      });
+    }
+  });
+
+  // POST /api/fix-trim-bleed - Apply TrimBox/BleedBox correction to a copy of the PDF
+  app.post("/api/fix-trim-bleed", upload.single("file"), async (req: Request, res: Response) => {
+    const file = req.file;
+    if (!file) return res.status(400).json({ success: false, error: "Nenhum PDF enviado." });
+
+    const profileId = typeof req.body?.profileId === "string" ? req.body.profileId : "";
+
+    const profileMap: Record<string, ProductionProfile> = {
+      commercial_print_300dpi: COMMERCIAL_PRINT_300DPI_PROFILE,
+      commercial_flyer_a4: A4_COMMERCIAL_FLYER_PROFILE,
+      large_format_banner: LARGE_FORMAT_BANNER_PROFILE,
+    };
+    const profile = profileMap[profileId] || COMMERCIAL_PRINT_300DPI_PROFILE;
+
+    try {
+      if (!file.buffer.subarray(0, Math.min(file.buffer.length, 1024)).includes(Buffer.from("%PDF-"))) {
+        return res.status(400).json({ success: false, error: "Arquivo sem assinatura PDF válida." });
+      }
+
+      const doc = await extractPdfStructure(file.buffer);
+      const eligibility = checkTrimBleedEligibility(doc, profile);
+
+      if (!eligibility.eligible) {
+        return res.json({
+          success: false,
+          eligible: false,
+          eligibility,
+          error: eligibility.globalReason,
+        });
+      }
+
+      const result = await applyTrimBleedFix(file.buffer, doc, profile);
+
+      if (!result.success || !result.pdfBytes) {
+        return res.json({
+          success: false,
+          eligible: true,
+          eligibility,
+          audit: result.audit,
+          revalidation: result.revalidation,
+          error: result.error,
+        });
+      }
+
+      const fixedBuffer = Buffer.from(result.pdfBytes);
+      const base64 = fixedBuffer.toString("base64");
+
+      return res.json({
+        success: true,
+        eligible: true,
+        eligibility,
+        fixedPdfBase64: base64,
+        fixedPdfSize: fixedBuffer.length,
+        audit: result.audit,
+        revalidation: result.revalidation,
+      });
+    } catch (error: any) {
+      return res.status(400).json({
+        success: false,
+        error: error?.message || "Falha ao aplicar correção TrimBox/BleedBox.",
       });
     }
   });

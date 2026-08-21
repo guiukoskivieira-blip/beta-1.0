@@ -164,3 +164,40 @@ export async function askPreflightAssistant(
 }
 
 export const askAiAssistant = askPreflightAssistant;
+
+export interface TrimBleedFixApiResponse {
+  success: boolean;
+  eligible?: boolean;
+  eligibility?: any;
+  fixedPdfBase64?: string;
+  fixedPdfSize?: number;
+  audit?: any;
+  revalidation?: {
+    ruleStatus: 'approved' | 'error' | 'warning' | 'undetermined';
+    validated: boolean;
+    message: string;
+  };
+  error?: string;
+}
+
+export async function applyTrimBleedFixViaApi(
+  file: File,
+  profileId: string
+): Promise<TrimBleedFixApiResponse> {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('profileId', profileId);
+
+  const authHeader = await getAuthHeader();
+
+  const res = await fetch('/api/fix-trim-bleed', {
+    method: 'POST',
+    body: formData,
+    headers: {
+      ...authHeader,
+    },
+  });
+
+  const data = await res.json();
+  return data as TrimBleedFixApiResponse;
+}

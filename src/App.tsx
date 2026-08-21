@@ -17,6 +17,7 @@ import { JobCheckForm, EMPTY_SPEC } from './components/JobCheckForm';
 import { JobCheckResults } from './components/JobCheckResults';
 import { VisualPreview } from './components/VisualPreview';
 import { FixEnginePanel } from './components/FixEnginePanel';
+import { TrimBleedFixPanel } from './components/TrimBleedFixPanel';
 
 import { STANDARD_PROFILES, COMMERCIAL_PRINT_300DPI_PROFILE, ProductionProfile } from './utils/productionProfiles';
 import { runDeterministicRuleEngine } from './utils/ruleEngine';
@@ -189,6 +190,7 @@ export const App: React.FC = () => {
                   />
                 )}
                 <FixEnginePanel analysis={currentAnalysis} />
+                <TrimBleedFixPanel analysis={currentAnalysis} profile={selectedProfile} originalFile={selectedFile} />
                 <DiagnosticPanel ruleResults={currentAnalysis.ruleResults} />
                 <AiAssistant analysis={currentAnalysis} />
               </div>

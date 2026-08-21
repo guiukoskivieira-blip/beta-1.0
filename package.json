@@ -11,7 +11,7 @@
     "lint": "tsc --noEmit",
     "check": "npm run test && npm run lint && npm run build",
     "smoke": "node scripts/smoke.mjs",
-    "test": "tsx tests/pdfExtractor.test.ts && tsx tests/supabaseSaaS.test.ts && tsx tests/billing.test.ts && tsx tests/assistantSubordination.test.ts && tsx tests/regressionPdfParser.test.ts && tsx tests/regressionApi.test.ts && tsx tests/regressionOrchestration.test.ts && tsx tests/regressionBilling.test.ts && tsx tests/regressionAssistant.test.ts && tsx tests/jobCheck.test.ts && tsx tests/jobCheckUi.test.ts && tsx tests/visualMarkers.test.ts && tsx tests/fixEngine.test.ts",
+    "test": "tsx tests/pdfExtractor.test.ts && tsx tests/supabaseSaaS.test.ts && tsx tests/billing.test.ts && tsx tests/assistantSubordination.test.ts && tsx tests/regressionPdfParser.test.ts && tsx tests/regressionApi.test.ts && tsx tests/regressionOrchestration.test.ts && tsx tests/regressionBilling.test.ts && tsx tests/regressionAssistant.test.ts && tsx tests/jobCheck.test.ts && tsx tests/jobCheckUi.test.ts && tsx tests/visualMarkers.test.ts && tsx tests/fixEngine.test.ts && tsx tests/trimBleedFix.test.ts",
     "test:saas": "tsx tests/supabaseSaaS.test.ts",
     "test:regression": "tsx tests/regressionPdfParser.test.ts && tsx tests/regressionApi.test.ts && tsx tests/regressionOrchestration.test.ts && tsx tests/regressionBilling.test.ts && tsx tests/regressionAssistant.test.ts"
   },
