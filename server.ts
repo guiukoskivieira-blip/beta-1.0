@@ -125,7 +125,7 @@ const upload = multer({
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // CORS and headers middleware to support iframe and cross-origin preview requests
   app.use((req: Request, res: Response, next: NextFunction) => {
