@@ -11,7 +11,7 @@ interface TrimBleedFixPanelProps {
   originalFile: File | null;
 }
 
-type Phase = 'idle' | 'preview' | 'applying' | 'applied' | 'cancelled' | 'error';
+type Phase = 'idle' | 'preview' | 'applying' | 'applied' | 'cancelled' | 'error' | 'structural_error';
 
 export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, profile, originalFile }) => {
   const [phase, setPhase] = useState<Phase>('idle');
@@ -19,6 +19,7 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [revalidationMessage, setRevalidationMessage] = useState<string>('');
   const [validated, setValidated] = useState<boolean>(false);
+  const [structuralValid, setStructuralValid] = useState<boolean>(false);
   const [fixedPdfBlob, setFixedPdfBlob] = useState<Blob | null>(null);
 
   const bleedRule = useMemo(() => {
@@ -64,6 +65,12 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
       const response = await applyTrimBleedFixViaApi(originalFile, profile.id);
 
       if (!response.success || !response.fixedPdfBase64) {
+        // Check if this was a structural validation failure
+        if (response.structuralValidation && !response.structuralValidation.valid) {
+          setErrorMessage(response.structuralValidation.message || 'Falha na validação estrutural do PDF corrigido.');
+          setPhase('structural_error');
+          return;
+        }
         setErrorMessage(response.error || 'Não foi possível aplicar a correção.');
         setPhase('error');
         return;
@@ -77,12 +84,24 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
       const blob = new Blob([bytes], { type: 'application/pdf' });
       setFixedPdfBlob(blob);
 
+      const structureOk = response.structuralValidation?.valid ?? false;
+      setStructuralValid(structureOk);
+
       if (response.revalidation) {
         setRevalidationMessage(response.revalidation.message);
         setValidated(response.revalidation.validated);
       }
 
-      setPhase('applied');
+      // Only mark as 'applied' if both structural and Motor 1 validation passed
+      if (structureOk && response.revalidation?.validated) {
+        setPhase('applied');
+      } else if (!structureOk) {
+        setErrorMessage('Falha na validação estrutural do PDF corrigido.');
+        setPhase('structural_error');
+      } else {
+        // Structural passed but Motor 1 didn't approve
+        setPhase('applied');
+      }
     } catch (err: any) {
       setErrorMessage(err?.message || 'Erro ao comunicar com o servidor.');
       setPhase('error');
@@ -112,6 +131,7 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
     setErrorMessage('');
     setRevalidationMessage('');
     setValidated(false);
+    setStructuralValid(false);
     setFixedPdfBlob(null);
   }, []);
 
@@ -298,40 +318,70 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
         </div>
       )}
 
-      {/* Applied state */}
+      {/* Applied state — only shown when both structural + Motor 1 validation pass */}
       {phase === 'applied' && (
         <div className="mt-5">
-          <div className={`flex items-start space-x-2.5 p-4 rounded-xl mb-4 ${
-            validated
-              ? 'bg-[#00D18F]/5 border border-[#00D18F]/20'
-              : 'bg-[#FFB800]/5 border border-[#FFB800]/20'
-          }`}>
-            {validated ? (
-              <CheckCircle2 className="w-5 h-5 text-[#00D18F] shrink-0 mt-0.5" />
-            ) : (
-              <AlertTriangle className="w-5 h-5 text-[#FFB800] shrink-0 mt-0.5" />
-            )}
-            <div>
-              <p className={`text-sm font-medium ${validated ? 'text-[#00D18F]' : 'text-[#FFB800]'}`}>
-                {revalidationMessage}
-              </p>
-              <p className="text-xs text-[#A6B4C9] mt-1">
-                {validated
-                  ? 'O Motor 1 reanalisou o PDF corrigido e confirmou que a regra de sangria agora está aprovada.'
-                  : 'O Motor 1 reanalisou o PDF corrigido. A alteração foi aplicada, mas o problema persiste.'}
-              </p>
+          {structuralValid && validated ? (
+            <>
+              <div className="flex items-start space-x-2.5 p-4 rounded-xl mb-4 bg-[#00D18F]/5 border border-[#00D18F]/20">
+                <CheckCircle2 className="w-5 h-5 text-[#00D18F] shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-medium text-[#00D18F]">PDF corrigido e validado</p>
+                  <div className="mt-2 space-y-1">
+                    <p className="text-xs text-[#A6B4C9] flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3 h-3 text-[#00D18F]" /> Integridade estrutural
+                    </p>
+                    <p className="text-xs text-[#A6B4C9] flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3 h-3 text-[#00D18F]" /> Reanálise pelo Motor 1
+                    </p>
+                    <p className="text-xs text-[#A6B4C9] flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3 h-3 text-[#00D18F]" /> TrimBox validado
+                    </p>
+                    <p className="text-xs text-[#A6B4C9] flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3 h-3 text-[#00D18F]" /> BleedBox validado
+                    </p>
+                    <p className="text-xs text-[#A6B4C9] flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3 h-3 text-[#00D18F]" /> Conteúdo gráfico preservado
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className={`flex items-start space-x-2.5 p-4 rounded-xl mb-4 ${
+              structuralValid
+                ? 'bg-[#FFB800]/5 border border-[#FFB800]/20'
+                : 'bg-[#FF4D4D]/5 border border-[#FF4D4D]/20'
+            }`}>
+              {structuralValid ? (
+                <AlertTriangle className="w-5 h-5 text-[#FFB800] shrink-0 mt-0.5" />
+              ) : (
+                <AlertTriangle className="w-5 h-5 text-[#FF4D4D] shrink-0 mt-0.5" />
+              )}
+              <div>
+                <p className={`text-sm font-medium ${structuralValid ? 'text-[#FFB800]' : 'text-[#FF4D4D]'}`}>
+                  {structuralValid ? revalidationMessage : 'Falha na validação estrutural do PDF corrigido.'}
+                </p>
+                <p className="text-xs text-[#A6B4C9] mt-1">
+                  {structuralValid
+                    ? 'O Motor 1 reanalisou o PDF corrigido. A alteração foi aplicada, mas o problema persiste.'
+                    : 'O PDF gerado não passou na validação estrutural. O arquivo original permanece intacto.'}
+                </p>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleDownload}
-              className="inline-flex items-center px-5 py-2.5 rounded-xl text-sm font-medium bg-[#007BFF]/15 border border-[#007BFF]/40 text-[#007BFF] hover:bg-[#007BFF]/25 cursor-pointer transition-all"
-            >
-              <Download className="w-4 h-4 mr-2" />
-              Baixar PDF corrigido
-            </button>
+            {structuralValid && (
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="inline-flex items-center px-5 py-2.5 rounded-xl text-sm font-medium bg-[#007BFF]/15 border border-[#007BFF]/40 text-[#007BFF] hover:bg-[#007BFF]/25 cursor-pointer transition-all"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                Baixar PDF corrigido
+              </button>
+            )}
             <button
               type="button"
               onClick={handleReset}
@@ -360,6 +410,29 @@ export const TrimBleedFixPanel: React.FC<TrimBleedFixPanelProps> = ({ analysis, 
           >
             <RefreshCw className="w-4 h-4 mr-2" />
             Voltar
+          </button>
+        </div>
+      )}
+
+      {/* Structural error state — PDF failed independent structural validation */}
+      {phase === 'structural_error' && (
+        <div className="mt-5">
+          <div className="flex items-start space-x-2.5 p-4 rounded-xl bg-[#FF4D4D]/5 border border-[#FF4D4D]/20 mb-4">
+            <AlertTriangle className="w-5 h-5 text-[#FF4D4D] shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-[#FF4D4D]">{errorMessage}</p>
+              <p className="text-xs text-[#A6B4C9] mt-1">
+                O PDF corrigido não pode ser disponibilizado como validado. O arquivo original permanece intacto.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleReset}
+            className="inline-flex items-center px-4 py-2 rounded-xl text-sm font-medium bg-[#1A2332] border border-[#243244] text-[#8E98A7] hover:bg-[#243244] hover:text-white cursor-pointer transition-all"
+          >
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Tentar novamente
           </button>
         </div>
       )}

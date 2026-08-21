@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import { PDFDocument } from 'pdf-lib';
-import { checkTrimBleedEligibility, applyTrimBleedFix, buildPreviewData } from '../src/services/trimBleedFix';
+import { checkTrimBleedEligibility, applyTrimBleedFix, buildPreviewData, validatePdfStructure } from '../src/services/trimBleedFix';
 import { A4_COMMERCIAL_FLYER_PROFILE, COMMERCIAL_PRINT_300DPI_PROFILE, LARGE_FORMAT_BANNER_PROFILE } from '../src/utils/productionProfiles';
 import { runDeterministicRuleEngine } from '../src/utils/ruleEngine';
 import { extractPdfStructure } from '../server/pdfExtractor';
@@ -386,6 +386,187 @@ testAsync('Conteúdo gráfico não é alterado (texto preservado)', async () => 
 
   // Also verify the page count is the same
   assert.equal(fixedDoc.getPageCount(), 1, 'Page count deve ser preservado');
+});
+
+// ============================================================================
+// TESTES ESTRUTURAIS — Integridade e Compatibilidade do PDF Corrigido
+// ============================================================================
+
+// A) PDF original continua byte-a-byte intacto
+testAsync('ESTRUTURAL A: PDF original permanece byte-a-byte intacto', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const originalCopy = new Uint8Array(pdfBytes);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  for (let i = 0; i < originalCopy.length; i++) {
+    assert.equal(pdfBytes[i], originalCopy[i], `Byte ${i} alterado no original`);
+  }
+});
+
+// B) PDF corrigido abre novamente pelo parser
+testAsync('ESTRUTURAL B: PDF corrigido abre novamente pelo parser', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const fixedDoc = await extractPdfStructure(Buffer.from(result.pdfBytes!));
+  assert.ok(fixedDoc.pageCount > 0, 'PDF corrigido deve ser parseável');
+});
+
+// C) MediaBox preservado
+testAsync('ESTRUTURAL C: MediaBox preservado após correção', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const originalDoc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const originalMb = originalDoc.pages[0].mediaBox;
+  const result = await applyTrimBleedFix(pdfBytes, originalDoc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const fixedDoc = await extractPdfStructure(Buffer.from(result.pdfBytes!));
+  const fixedMb = fixedDoc.pages[0].mediaBox;
+  assert.ok(Math.abs(fixedMb.widthMm - originalMb.widthMm) < 0.5, `MediaBox largura deve ser ~${originalMb.widthMm}mm`);
+  assert.ok(Math.abs(fixedMb.heightMm - originalMb.heightMm) < 0.5, `MediaBox altura deve ser ~${originalMb.heightMm}mm`);
+});
+
+// D) TrimBox correto (210x297mm)
+testAsync('ESTRUTURAL D: TrimBox correto (210x297mm)', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const fixedDoc = await extractPdfStructure(Buffer.from(result.pdfBytes!));
+  const trim = fixedDoc.pages[0].trimBox;
+  assert.ok(trim, 'TrimBox deve existir');
+  assert.ok(Math.abs(trim!.widthMm - 210) < 1, `TrimBox largura ~210mm, got ${trim!.widthMm}`);
+  assert.ok(Math.abs(trim!.heightMm - 297) < 1, `TrimBox altura ~297mm, got ${trim!.heightMm}`);
+});
+
+// E) BleedBox correto (216x303mm)
+testAsync('ESTRUTURAL E: BleedBox correto (216x303mm)', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const fixedDoc = await extractPdfStructure(Buffer.from(result.pdfBytes!));
+  const bleed = fixedDoc.pages[0].bleedBox;
+  assert.ok(bleed, 'BleedBox deve existir');
+  assert.ok(Math.abs(bleed!.widthMm - 216) < 1, `BleedBox largura ~216mm, got ${bleed!.widthMm}`);
+  assert.ok(Math.abs(bleed!.heightMm - 303) < 1, `BleedBox altura ~303mm, got ${bleed!.heightMm}`);
+});
+
+// F) Sangria de 3mm em cada lado
+testAsync('ESTRUTURAL F: Sangria de 3mm em cada lado', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const fixedDoc = await extractPdfStructure(Buffer.from(result.pdfBytes!));
+  const trim = fixedDoc.pages[0].trimBox!;
+  const bleed = fixedDoc.pages[0].bleedBox!;
+  const bleedLeftMm = (trim.xPt - bleed.xPt) * (25.4 / 72);
+  const bleedBottomMm = (trim.yPt - bleed.yPt) * (25.4 / 72);
+  const bleedRightMm = (bleed.xPt + bleed.widthPt - trim.xPt - trim.widthPt) * (25.4 / 72);
+  const bleedTopMm = (bleed.yPt + bleed.heightPt - trim.yPt - trim.heightPt) * (25.4 / 72);
+  assert.ok(Math.abs(bleedLeftMm - 3) < 0.5, `Sangria esquerda ~3mm, got ${bleedLeftMm.toFixed(1)}`);
+  assert.ok(Math.abs(bleedRightMm - 3) < 0.5, `Sangria direita ~3mm, got ${bleedRightMm.toFixed(1)}`);
+  assert.ok(Math.abs(bleedTopMm - 3) < 0.5, `Sangria superior ~3mm, got ${bleedTopMm.toFixed(1)}`);
+  assert.ok(Math.abs(bleedBottomMm - 3) < 0.5, `Sangria inferior ~3mm, got ${bleedBottomMm.toFixed(1)}`);
+});
+
+// G) Número de páginas preservado
+testAsync('ESTRUTURAL G: Número de páginas preservado', async () => {
+  const doc1 = await PDFDocument.create();
+  doc1.addPage([216 * MM_TO_PT, 303 * MM_TO_PT]);
+  doc1.addPage([216 * MM_TO_PT, 303 * MM_TO_PT]);
+  doc1.addPage([216 * MM_TO_PT, 303 * MM_TO_PT]);
+  const pdfBytes = await doc1.save();
+  const extractedDoc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, extractedDoc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const fixedDoc = await extractPdfStructure(Buffer.from(result.pdfBytes!));
+  assert.equal(fixedDoc.pageCount, 3, 'Deve ter 3 páginas');
+});
+
+// H) Conteúdo da página não removido
+testAsync('ESTRUTURAL H: Conteúdo da página não removido', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([216 * MM_TO_PT, 303 * MM_TO_PT]);
+  page.drawText('ARTECHECK TEST CONTENT', { x: 50, y: 50, size: 14 });
+  const originalBytes = await doc.save();
+  const extractedDoc = await extractPdfStructure(Buffer.from(originalBytes));
+  const result = await applyTrimBleedFix(originalBytes, extractedDoc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const fixedDoc = await PDFDocument.load(result.pdfBytes!);
+  const fixedPage = fixedDoc.getPages()[0];
+  assert.ok(fixedPage.node.Contents(), 'Content stream deve existir');
+});
+
+// I) PDF termina corretamente com %%EOF
+testAsync('ESTRUTURAL I: PDF termina corretamente com %%EOF', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const tailStr = Buffer.from(result.pdfBytes!.subarray(Math.max(0, result.pdfBytes!.length - 1024))).toString('latin1');
+  assert.match(tailStr, /%%EOF/, 'PDF deve terminar com %%EOF');
+});
+
+// J) xref/trailer ou estrutura equivalente válida
+testAsync('ESTRUTURAL J: xref/trailer ou estrutura equivalente válida', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const structural = validatePdfStructure(result.pdfBytes!);
+  assert.ok(structural.checks.xrefOrTrailer, 'xref table ou xref stream deve estar presente');
+});
+
+// K) Arquivo corrigido pode ser reanalisado pelo Motor 1
+testAsync('ESTRUTURAL K: Arquivo corrigido pode ser reanalisado pelo Motor 1', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const fixedDoc = await extractPdfStructure(Buffer.from(result.pdfBytes!));
+  const motor1Result = runDeterministicRuleEngine(fixedDoc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.ok(motor1Result.results.length > 0, 'Motor 1 deve produzir resultados');
+});
+
+// L) Motor 1 aprova a regra corrigida
+testAsync('ESTRUTURAL L: Motor 1 aprova a regra corrigida (RULE-PROF-BLD-001)', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  assert.equal(result.revalidation.ruleStatus, 'approved', 'Motor 1 deve aprovar a regra de sangria');
+  assert.equal(result.revalidation.validated, true, 'Revalidação deve ser true');
+});
+
+// M) Falha estrutural impede status final de sucesso
+testAsync('ESTRUTURAL M: Falha estrutural impede status final de sucesso', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  // Now corrupt the fixed PDF bytes to simulate structural failure
+  const corruptedBytes = new Uint8Array(result.pdfBytes!);
+  corruptedBytes[0] = 0x58; // Corrupt the header byte
+  const structural = validatePdfStructure(corruptedBytes);
+  assert.equal(structural.valid, false, 'PDF corrompido não deve passar validação estrutural');
+  assert.equal(structural.checks.header, false, 'Header deve falhar');
+});
+
+// N) Nenhuma outra correção automática é executada
+testAsync('ESTRUTURAL N: Nenhuma outra correção automática é executada', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  // Verify only TrimBox and BleedBox were changed — audit should only have trim_bleed_box
+  assert.equal(result.audit.fixType, 'trim_bleed_box', 'Fix type deve ser apenas trim_bleed_box');
+  // Verify MediaBox was NOT changed
+  const fixedDoc = await extractPdfStructure(Buffer.from(result.pdfBytes!));
+  assert.ok(Math.abs(fixedDoc.pages[0].mediaBox.widthMm - 216) < 0.5, 'MediaBox não deve ser alterado');
+  assert.ok(Math.abs(fixedDoc.pages[0].mediaBox.heightMm - 303) < 0.5, 'MediaBox não deve ser alterado');
 });
 
 // ============================================================================

@@ -173,6 +173,11 @@ export interface TrimBleedFixApiResponse {
   fixedPdfBase64?: string;
   fixedPdfSize?: number;
   audit?: any;
+  structuralValidation?: {
+    valid: boolean;
+    checks: { header: boolean; eof: boolean; xrefOrTrailer: boolean; reparseable: boolean };
+    message: string;
+  };
   revalidation?: {
     ruleStatus: 'approved' | 'error' | 'warning' | 'undetermined';
     validated: boolean;

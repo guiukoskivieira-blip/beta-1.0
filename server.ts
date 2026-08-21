@@ -866,6 +866,7 @@ async function startServer() {
           eligible: true,
           eligibility,
           audit: result.audit,
+          structuralValidation: result.structuralValidation,
           revalidation: result.revalidation,
           error: result.error,
         });
@@ -881,6 +882,7 @@ async function startServer() {
         fixedPdfBase64: base64,
         fixedPdfSize: fixedBuffer.length,
         audit: result.audit,
+        structuralValidation: result.structuralValidation,
         revalidation: result.revalidation,
       });
     } catch (error: any) {
