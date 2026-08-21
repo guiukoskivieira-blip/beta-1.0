@@ -1,16 +1,18 @@
 import React from 'react';
-import { Loader2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Loader as Loader2, CircleCheck as CheckCircle2, CircleAlert as AlertCircle, Crown } from 'lucide-react';
 
 interface ProcessingStateProps {
   status: 'uploading' | 'extracting' | 'analyzing' | 'error';
   errorMessage?: string;
   onRetry?: () => void;
+  onUpgrade?: () => void;
 }
 
 export const ProcessingState: React.FC<ProcessingStateProps> = ({
   status,
   errorMessage,
   onRetry,
+  onUpgrade,
 }) => {
   const steps = [
     { id: 'uploading', label: 'Envio seguro em memória (Zero Storage)' },
@@ -46,6 +48,16 @@ export const ProcessingState: React.FC<ProcessingStateProps> = ({
             className="px-6 py-2.5 bg-[#007BFF] hover:bg-[#0066D6] text-white font-medium text-sm rounded-xl transition-all shadow-lg"
           >
             Tentar Novamente
+          </button>
+        )}
+        {onUpgrade && (
+          <button
+            type="button"
+            onClick={onUpgrade}
+            className="ml-3 px-6 py-2.5 bg-gradient-to-r from-[#007BFF] to-[#6A00FF] hover:opacity-90 text-white font-semibold text-sm rounded-xl transition-all shadow-lg inline-flex items-center"
+          >
+            <Crown className="w-4 h-4 mr-1.5" />
+            Fazer Upgrade
           </button>
         )}
       </div>

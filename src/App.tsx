@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { UploadZone } from './components/UploadZone';
@@ -26,12 +26,16 @@ import { LocalStorageProvider } from './storage/LocalStorageProvider';
 import type { BetaUser, StoredProductionProfile } from './domain/beta';
 import type { PreflightAnalysis, PdfDocumentStructure } from './types';
 import { uploadPdfForExtraction } from './services/api';
+import { auth } from './auth';
+import { getBillingStatus } from './services/billing';
+import type { BillingStatus } from './domain/billing';
 
 export const App: React.FC = () => {
   const [selectedProfile, setSelectedProfile] = useState<ProductionProfile>(COMMERCIAL_PRINT_300DPI_PROFILE);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [processingStatus, setProcessingStatus] = useState<'idle' | 'uploading' | 'extracting' | 'analyzing' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [limitReached, setLimitReached] = useState(false);
   const [currentAnalysis, setCurrentAnalysis] = useState<PreflightAnalysis | null>(null);
 
   // Job Check state
@@ -47,13 +51,25 @@ export const App: React.FC = () => {
   const [isPlansOpen, setIsPlansOpen] = useState(false);
 
   // User state
-  const [currentUser, setCurrentUser] = useState<BetaUser | null>({
-    id: 'local_dev_user',
-    email: 'dev@artecheck.local',
-    displayName: 'Engenheiro Gráfico',
-    companyName: 'Gráfica Modelo',
-    role: 'developer',
-  });
+  const [currentUser, setCurrentUser] = useState<BetaUser | null>(null);
+  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
+
+  // Sync auth state on mount and fetch billing status
+  useEffect(() => {
+    auth.getCurrentUser().then((u) => {
+      if (u) setCurrentUser(u);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (currentUser) {
+      getBillingStatus()
+        .then((s) => setBillingStatus(s))
+        .catch(() => setBillingStatus(null));
+    } else {
+      setBillingStatus(null);
+    }
+  }, [currentUser]);
 
   const storage = new LocalStorageProvider();
 
@@ -70,6 +86,7 @@ export const App: React.FC = () => {
 
     setProcessingStatus('uploading');
     setErrorMessage(null);
+    setLimitReached(false);
 
     try {
       // 1. Upload & Deterministic Structure Extraction on backend
@@ -116,6 +133,11 @@ export const App: React.FC = () => {
 
       setCurrentAnalysis(analysis);
 
+      // Refresh billing status after analysis to update usage counter
+      if (currentUser) {
+        getBillingStatus().then(setBillingStatus).catch(() => {});
+      }
+
       // Run Job Check if enabled with spec data
       if (jobCheckEnabled) {
         const jcResult = runJobCheck(jobCheckSpec, analysis);
@@ -128,7 +150,9 @@ export const App: React.FC = () => {
     } catch (err: any) {
       console.error('Erro na análise:', err);
       setProcessingStatus('error');
-      setErrorMessage(err.message || 'Erro inesperado ao analisar o documento.');
+      const msg = err?.message || 'Erro inesperado ao analisar o documento.';
+      setErrorMessage(msg);
+      setLimitReached(msg.includes('limite') || msg.includes('upgrade') || msg.includes('atingiu'));
     }
   };
 
@@ -138,6 +162,7 @@ export const App: React.FC = () => {
     setJobCheckResult(null);
     setProcessingStatus('idle');
     setErrorMessage(null);
+    setLimitReached(false);
   };
 
   return (
@@ -149,12 +174,47 @@ export const App: React.FC = () => {
         onOpenAbout={() => setIsAboutOpen(true)}
         currentUser={currentUser}
         onOpenAuth={() => setIsAuthOpen(true)}
-        onSignOut={() => setCurrentUser(null)}
+        onSignOut={async () => {
+          await auth.signOut();
+          setCurrentUser(null);
+          setBillingStatus(null);
+        }}
         onOpenProfiles={() => setIsProfilesOpen(true)}
         onOpenPlans={() => setIsPlansOpen(true)}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Billing status bar */}
+        {currentUser && billingStatus && billingStatus.limitAnalyses > 0 && (
+          <div className="mb-4 flex items-center gap-3 px-4 py-2.5 rounded-xl border border-[#243244] bg-[#101722] text-sm">
+            <span className="text-[#8E98A7] text-xs">Plano <strong className="text-white">{billingStatus.plan}</strong></span>
+            <span className="text-[#8E98A7] text-xs">
+              Análises: <strong className="text-white">{billingStatus.usedAnalyses}/{billingStatus.limitAnalyses}</strong>
+              <span className="text-[#8E98A7] ml-1">({Math.max(0, billingStatus.limitAnalyses - billingStatus.usedAnalyses)} restantes)</span>
+            </span>
+            <div className="flex-1 h-1.5 bg-[#182231] rounded-full overflow-hidden max-w-[120px]">
+              <div
+                className={`h-full rounded-full transition-all ${
+                  billingStatus.usedAnalyses >= billingStatus.limitAnalyses
+                    ? 'bg-[#FF4D4D]'
+                    : billingStatus.usedAnalyses / billingStatus.limitAnalyses > 0.8
+                    ? 'bg-[#FFB800]'
+                    : 'bg-[#00D18F]'
+                }`}
+                style={{ width: `${Math.min(100, Math.round((billingStatus.usedAnalyses / billingStatus.limitAnalyses) * 100))}%` }}
+              />
+            </div>
+            {billingStatus.usedAnalyses >= billingStatus.limitAnalyses && (
+              <button
+                type="button"
+                onClick={() => setIsPlansOpen(true)}
+                className="px-3 py-1 rounded-lg text-xs font-semibold bg-[#007BFF] text-white hover:bg-[#0066D6] transition-colors"
+              >
+                Fazer upgrade
+              </button>
+            )}
+          </div>
+        )}
         <div className="flex flex-col lg:flex-row gap-8">
           <Sidebar
             selectedProfile={selectedProfile}
@@ -177,6 +237,7 @@ export const App: React.FC = () => {
                 status={processingStatus}
                 errorMessage={errorMessage || undefined}
                 onRetry={handleStartAnalysis}
+                onUpgrade={limitReached ? () => setIsPlansOpen(true) : undefined}
               />
             ) : currentAnalysis ? (
               <div>

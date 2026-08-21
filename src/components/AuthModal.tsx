@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, Mail, Lock, Building, User, LogIn, UserPlus } from 'lucide-react';
+import { X, Mail, Lock, Building, User, LogIn, UserPlus, Loader as Loader2 } from 'lucide-react';
 import type { BetaUser } from '../domain/beta';
+import { auth } from '../auth';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -15,24 +16,49 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
   const [displayName, setDisplayName] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !email.includes('@')) {
       setError('Por favor, informe um e-mail corporativo válido.');
       return;
     }
-    const user: BetaUser = {
-      id: `usr_${Date.now()}`,
-      email,
-      displayName: displayName || email.split('@')[0],
-      companyName: companyName || 'Gráfica Modelo',
-      role: 'authenticated',
-    };
-    onSuccess(user);
-    onClose();
+    if (!password || password.length < 6) {
+      setError('A senha deve ter no mínimo 6 caracteres.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const session = isSignUp
+        ? await auth.signUp(email, password, displayName || undefined, companyName || undefined)
+        : await auth.signIn(email, password);
+
+      if (!session?.user) {
+        throw new Error('Não foi possível autenticar. Tente novamente.');
+      }
+
+      onSuccess(session.user);
+      onClose();
+    } catch (err: any) {
+      const msg = err?.message || '';
+      if (msg.includes('Invalid login') || msg.includes('credentials')) {
+        setError('E-mail ou senha incorretos. Verifique e tente novamente.');
+      } else if (msg.includes('already') || msg.includes('registered') || msg.includes('exists')) {
+        setError('Este e-mail já está cadastrado. Faça login em vez de criar uma nova conta.');
+      } else if (msg.includes('rate limit') || msg.includes('too many')) {
+        setError('Muitas tentativas. Aguarde alguns segundos e tente novamente.');
+      } else {
+        setError(msg || 'Erro ao autenticar. Tente novamente.');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -128,8 +154,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onSuccess
 
           <button
             type="submit"
-            className="w-full py-3 bg-[#007BFF] hover:bg-[#0066D6] text-white font-medium rounded-xl transition-all shadow-lg mt-2 cursor-pointer"
+            disabled={loading}
+            className="w-full py-3 bg-[#007BFF] hover:bg-[#0066D6] text-white font-medium rounded-xl transition-all shadow-lg mt-2 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center"
           >
+            {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
             {isSignUp ? 'Concluir Cadastro' : 'Entrar na Plataforma'}
           </button>
         </form>
