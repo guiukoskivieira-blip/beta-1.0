@@ -1,5 +1,6 @@
 import { UploadResponse, HealthResponse, AiAssistantResponse, AiGroundingContext } from '../types';
 import { auth } from '../auth';
+import { apiUrl } from '../config/api';
 
 export function formatFileSize(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -22,7 +23,7 @@ async function getAuthHeader(): Promise<Record<string, string>> {
 }
 
 export async function checkBackendHealth(): Promise<HealthResponse> {
-  const res = await fetch('/api/health');
+  const res = await fetch(apiUrl('/api/health'));
   if (!res.ok) {
     throw new Error(`Health check failed with status: ${res.status}`);
   }
@@ -32,7 +33,7 @@ export async function checkBackendHealth(): Promise<HealthResponse> {
 export const checkHealth = checkBackendHealth;
 
 export async function uploadPdfFile(file: File, signal?: AbortSignal): Promise<UploadResponse> {
-  const uploadUrl = '/api/upload';
+  const uploadUrl = apiUrl('/api/upload');
   const requestId = `upload-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const startedAt = performance.now();
 
@@ -128,7 +129,7 @@ export async function diagnosePdf(file: File): Promise<any> {
   formData.append('file', file);
   const authHeader = await getAuthHeader();
 
-  const res = await fetch('/api/diagnose', {
+  const res = await fetch(apiUrl('/api/diagnose'), {
     method: 'POST',
     body: formData,
     headers: {
@@ -144,7 +145,7 @@ export async function askPreflightAssistant(
   context: AiGroundingContext
 ): Promise<AiAssistantResponse> {
   const authHeader = await getAuthHeader();
-  const res = await fetch('/api/assistant', {
+  const res = await fetch(apiUrl('/api/assistant'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -190,7 +191,7 @@ export async function applyTrimBleedFixViaApi(
 
   const authHeader = await getAuthHeader();
 
-  const res = await fetch('/api/fix-trim-bleed', {
+  const res = await fetch(apiUrl('/api/fix-trim-bleed'), {
     method: 'POST',
     body: formData,
     headers: {

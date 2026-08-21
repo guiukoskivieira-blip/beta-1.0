@@ -106,7 +106,7 @@ test('Middleware de upload tem limite de arquivos (files: 1)', () => {
 // ============================================================================
 
 test('CORS permite origens cross-origin para preview em iframe', () => {
-  assert.match(serverSrc, /Access-Control-Allow-Origin.*\*/);
+  assert.match(serverSrc, /Access-Control-Allow-Origin/);
   assert.match(serverSrc, /Access-Control-Allow-Methods/);
 });
 

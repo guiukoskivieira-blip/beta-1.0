@@ -127,13 +127,36 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  // CORS and headers middleware to support iframe and cross-origin preview requests
+  // CORS — allowlist of known frontend origins (Bolt hosting, local dev, preview).
+  // Additional origins can be added via CORS_ALLOWED_ORIGINS env var (comma-separated).
+  const corsAllowlist = (process.env.CORS_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+  const defaultOrigins = [
+    "https://guiukoskivieira-blip-e2zm.bolt.host",
+  ];
+  const allowedOrigins = [...defaultOrigins, ...corsAllowlist];
+
+  function isAllowedOrigin(origin: string): boolean {
+    if (allowedOrigins.includes(origin)) return true;
+    // Allow localhost and bolt.host preview origins for development
+    if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return true;
+    if (/^https:\/\/.*\.bolt\.host$/.test(origin)) return true;
+    return false;
+  }
+
   app.use((req: Request, res: Response, next: NextFunction) => {
-    res.header("Access-Control-Allow-Origin", "*");
+    const origin = req.header("origin");
+    // Access-Control-Allow-Origin is set to the requesting origin when allowed
+    if (origin && isAllowedOrigin(origin)) {
+      res.header("Access-Control-Allow-Origin", origin);
+      res.header("Vary", "Origin");
+    }
     res.header("Cache-Control", "no-store");
     res.header("X-Content-Type-Options", "nosniff");
     res.header("Referrer-Policy", "no-referrer");
-    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
+    res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With, Accept, X-Request-ID");
     if (req.method === "OPTIONS") {
       return res.sendStatus(204);
