@@ -13,9 +13,12 @@ import { HistoryModal } from './components/HistoryModal';
 import { AboutBetaModal } from './components/AboutBetaModal';
 import { PlansModal } from './components/PlansModal';
 import { Footer } from './components/Footer';
+import { JobCheckForm, EMPTY_SPEC } from './components/JobCheckForm';
+import { JobCheckResults } from './components/JobCheckResults';
 
 import { STANDARD_PROFILES, COMMERCIAL_PRINT_300DPI_PROFILE, ProductionProfile } from './utils/productionProfiles';
 import { runDeterministicRuleEngine } from './utils/ruleEngine';
+import { runJobCheck, type JobCheckSpec, type JobCheckResult } from './services/jobCheck';
 import { LocalStorageProvider } from './storage/LocalStorageProvider';
 import type { BetaUser, StoredProductionProfile } from './domain/beta';
 import type { PreflightAnalysis, PdfDocumentStructure } from './types';
@@ -27,6 +30,11 @@ export const App: React.FC = () => {
   const [processingStatus, setProcessingStatus] = useState<'idle' | 'uploading' | 'extracting' | 'analyzing' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentAnalysis, setCurrentAnalysis] = useState<PreflightAnalysis | null>(null);
+
+  // Job Check state
+  const [jobCheckEnabled, setJobCheckEnabled] = useState(false);
+  const [jobCheckSpec, setJobCheckSpec] = useState<JobCheckSpec>(EMPTY_SPEC);
+  const [jobCheckResult, setJobCheckResult] = useState<JobCheckResult | null>(null);
 
   // Modals
   const [isAuthOpen, setIsAuthOpen] = useState(false);
@@ -49,6 +57,7 @@ export const App: React.FC = () => {
   const handleFileSelected = (file: File) => {
     setSelectedFile(file);
     setCurrentAnalysis(null);
+    setJobCheckResult(null);
     setProcessingStatus('idle');
     setErrorMessage(null);
   };
@@ -103,6 +112,15 @@ export const App: React.FC = () => {
       });
 
       setCurrentAnalysis(analysis);
+
+      // Run Job Check if enabled with spec data
+      if (jobCheckEnabled) {
+        const jcResult = runJobCheck(jobCheckSpec, analysis);
+        setJobCheckResult(jcResult);
+      } else {
+        setJobCheckResult(null);
+      }
+
       setProcessingStatus('idle');
     } catch (err: any) {
       console.error('Erro na análise:', err);
@@ -114,6 +132,7 @@ export const App: React.FC = () => {
   const handleReset = () => {
     setSelectedFile(null);
     setCurrentAnalysis(null);
+    setJobCheckResult(null);
     setProcessingStatus('idle');
     setErrorMessage(null);
   };
@@ -159,15 +178,30 @@ export const App: React.FC = () => {
             ) : currentAnalysis ? (
               <div>
                 <OperationalSummary analysis={currentAnalysis} />
+                {jobCheckResult && (
+                  <JobCheckResults
+                    result={jobCheckResult}
+                    spec={jobCheckSpec}
+                    analysis={currentAnalysis}
+                  />
+                )}
                 <DiagnosticPanel ruleResults={currentAnalysis.ruleResults} />
                 <AiAssistant analysis={currentAnalysis} />
               </div>
             ) : selectedFile ? (
-              <FileSelected
-                file={selectedFile}
-                onClear={handleReset}
-                onAnalyze={handleStartAnalysis}
-              />
+              <div>
+                <JobCheckForm
+                  enabled={jobCheckEnabled}
+                  onToggle={setJobCheckEnabled}
+                  spec={jobCheckSpec}
+                  onSpecChange={setJobCheckSpec}
+                />
+                <FileSelected
+                  file={selectedFile}
+                  onClear={handleReset}
+                  onAnalyze={handleStartAnalysis}
+                />
+              </div>
             ) : (
               <UploadZone onFileSelected={handleFileSelected} />
             )}
