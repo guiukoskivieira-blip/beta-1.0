@@ -625,6 +625,167 @@ testAsync('REGRESSÃO: PDF com useObjectStreams=false nunca contém /Type /XRef 
 });
 
 // ============================================================================
+// REGRESSÃO XREF: Verificação byte-a-byte de consistência de referências
+// ============================================================================
+
+testAsync('REGRESSÃO XREF: /Root aponta para objeto existente na xref', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const bytes = Buffer.from(result.pdfBytes!);
+  const str = bytes.toString('latin1');
+
+  // Extract /Root from trailer
+  const trailerMatch = str.match(/\ntrailer\n<<([\s\S]*?)>>/);
+  assert.ok(trailerMatch, 'trailer deve existir');
+  const rootMatch = trailerMatch![1].match(/\/Root\s+(\d+)\s+(\d+)\s+R/);
+  assert.ok(rootMatch, '/Root deve existir no trailer');
+  const rootObj = parseInt(rootMatch![1]);
+  const rootGen = parseInt(rootMatch![2]);
+
+  // Verify the /Root object exists at the xref-offset position
+  const xrefMatch = str.match(/xref\n(\d+ \d+)\n([\s\S]*?)\ntrailer/);
+  assert.ok(xrefMatch, 'xref table deve existir');
+  const [startObj, count] = xrefMatch![1].split(' ').map(Number);
+  const entries = xrefMatch![2].split('\n').filter(l => l.trim().length > 0);
+
+  // Find the xref entry for the root object
+  const rootEntryIdx = rootObj - startObj;
+  assert.ok(rootEntryIdx >= 0 && rootEntryIdx < entries.length, '/Root object deve ter entrada na xref');
+  const rootEntryParts = entries[rootEntryIdx].trim().split(/\s+/);
+  const rootOffset = parseInt(rootEntryParts[0]);
+  const rootGenInXref = parseInt(rootEntryParts[1]);
+
+  // Generation must match
+  assert.equal(rootGenInXref, rootGen, 'Generation do /Root na xref deve corresponder ao trailer');
+
+  // Object at that offset must be the Catalog
+  const objAtOffset = bytes.subarray(rootOffset, rootOffset + 60).toString('latin1');
+  assert.ok(objAtOffset.startsWith(`${rootObj} ${rootGen} obj`), 'Offset da xref deve apontar para o objeto /Root');
+  assert.ok(objAtOffset.includes('/Type /Catalog'), '/Root deve apontar para um Catalog');
+});
+
+testAsync('REGRESSÃO XREF: generation de todos objetos é consistente entre xref e declaração', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const bytes = Buffer.from(result.pdfBytes!);
+  const str = bytes.toString('latin1');
+
+  const xrefMatch = str.match(/xref\n(\d+ \d+)\n([\s\S]*?)\ntrailer/);
+  assert.ok(xrefMatch);
+  const [startObj, count] = xrefMatch![1].split(' ').map(Number);
+  const entries = xrefMatch![2].split('\n').filter(l => l.trim().length > 0);
+
+  for (let i = 0; i < entries.length; i++) {
+    const parts = entries[i].trim().split(/\s+/);
+    if (parts.length === 3 && parts[2] === 'n') {
+      const objNum = startObj + i;
+      const offset = parseInt(parts[0]);
+      const gen = parseInt(parts[1]);
+      // Byte-accurate check: the bytes at `offset` must start with "objNum gen obj"
+      const expected = `${objNum} ${gen} obj`;
+      const actual = bytes.subarray(offset, offset + expected.length).toString('latin1');
+      assert.equal(actual, expected, `obj ${objNum}: xref offset deve apontar para a declaração correta`);
+    }
+  }
+});
+
+testAsync('REGRESSÃO XREF: /Size é consistente com número de entradas na xref', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const str = Buffer.from(result.pdfBytes!).toString('latin1');
+
+  const xrefMatch = str.match(/xref\n(\d+ \d+)\n([\s\S]*?)\ntrailer/);
+  assert.ok(xrefMatch);
+  const [startObj, count] = xrefMatch![1].split(' ').map(Number);
+  const entries = xrefMatch![2].split('\n').filter(l => l.trim().length > 0);
+
+  const trailerMatch = str.match(/\ntrailer\n<<([\s\S]*?)>>/);
+  assert.ok(trailerMatch);
+  const sizeMatch = trailerMatch![1].match(/\/Size\s+(\d+)/);
+  assert.ok(sizeMatch);
+  const size = parseInt(sizeMatch![1]);
+
+  assert.equal(size, startObj + count, '/Size deve ser igual a startObj + count');
+  assert.equal(entries.length, count, 'Número de entradas deve ser igual ao count do header');
+});
+
+testAsync('REGRESSÃO XREF: startxref aponta para posição correta de xref', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const bytes = Buffer.from(result.pdfBytes!);
+  const str = bytes.toString('latin1');
+
+  const startxrefMatch = str.match(/startxref\s+(\d+)/);
+  assert.ok(startxrefMatch);
+  const startxrefVal = parseInt(startxrefMatch![1]);
+
+  // Byte-accurate: the bytes at startxref position must be "xref"
+  const atStartxref = bytes.subarray(startxrefVal, startxrefVal + 4).toString('latin1');
+  assert.equal(atStartxref, 'xref', 'startxref deve apontar para o byte "xref"');
+});
+
+testAsync('REGRESSÃO XREF: PDF corrigido pode ser carregado novamente por pdf-lib', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+
+  const reloaded = await PDFDocument.load(result.pdfBytes!);
+  assert.equal(reloaded.getPageCount(), 1, 'PDF recarregado deve ter 1 página');
+
+  // Verify TrimBox and BleedBox survived the round-trip
+  const page = reloaded.getPages()[0];
+  const trim = page.getTrimBox();
+  const bleed = page.getBleedBox();
+  const media = page.getMediaBox();
+
+  // TrimBox should be 210x297mm
+  assert.ok(Math.abs(trim.width * 25.4 / 72 - 210) < 1, 'TrimBox width ~210mm após reload');
+  assert.ok(Math.abs(trim.height * 25.4 / 72 - 297) < 1, 'TrimBox height ~297mm após reload');
+
+  // BleedBox should be 216x303mm
+  assert.ok(Math.abs(bleed.width * 25.4 / 72 - 216) < 1, 'BleedBox width ~216mm após reload');
+  assert.ok(Math.abs(bleed.height * 25.4 / 72 - 303) < 1, 'BleedBox height ~303mm após reload');
+
+  // MediaBox should be 216x303mm
+  assert.ok(Math.abs(media.width * 25.4 / 72 - 216) < 1, 'MediaBox width ~216mm após reload');
+  assert.ok(Math.abs(media.height * 25.4 / 72 - 303) < 1, 'MediaBox height ~303mm após reload');
+});
+
+testAsync('REGRESSÃO XREF: /Length do stream corresponde ao tamanho real dos dados', async () => {
+  const pdfBytes = await makePdfWithMediaBox(216, 303);
+  const doc = await extractPdfStructure(Buffer.from(pdfBytes));
+  const result = await applyTrimBleedFix(pdfBytes, doc, A4_COMMERCIAL_FLYER_PROFILE);
+  assert.equal(result.success, true);
+  const bytes = Buffer.from(result.pdfBytes!);
+  const str = bytes.toString('latin1');
+
+  // Find all stream objects and verify /Length
+  const streamPattern = /\/Length\s+(\d+)\s*>>\s*stream\n/g;
+  let match;
+  while ((match = streamPattern.exec(str)) !== null) {
+    const declaredLength = parseInt(match[1]);
+    const streamDataStart = match.index + match[0].length;
+    // Find endstream after stream data
+    const endstreamIdx = str.indexOf('\nendstream', streamDataStart);
+    const actualLength = endstreamIdx - streamDataStart;
+    // Use byte-accurate check for stream length
+    const byteStreamStart = bytes.indexOf(Buffer.from('stream\n'), match.index) + 'stream\n'.length;
+    const byteEndstream = bytes.indexOf(Buffer.from('\nendstream'), byteStreamStart);
+    const byteActualLength = byteEndstream - byteStreamStart;
+    assert.equal(byteActualLength, declaredLength, `/Length (${declaredLength}) deve corresponder ao tamanho real do stream (${byteActualLength})`);
+  }
+});
+
+// ============================================================================
 // RELATÓRIO
 // ============================================================================
 
