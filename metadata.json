@@ -1,0 +1,6 @@
+{
+  "name": "ArteCheck AI",
+  "description": "Análise técnica de arquivos PDF para pré-impressão e produção gráfica.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

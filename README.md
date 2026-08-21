@@ -1,11 +1,48 @@
-<div align="center">
+# ArteCheck AI — Preflight Beta
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+Aplicação de análise determinística de PDFs para pré-impressão, com perfis de produção, Rule Engine explicável, relatório operacional e camada técnica detalhada.
 
-  <h1>Built with AI Studio</h2>
+## Rodar localmente
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+```bash
+npm install
+npm run dev
+```
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+A aplicação e o backend Express usam a porta `3000`.
 
-</div>
+## Validar
+
+```bash
+npm run check
+```
+
+Esse comando executa testes, TypeScript e build de produção.
+
+## Endpoints
+
+- `GET /api/health` — health check.
+- `POST /api/upload` — análise determinística completa.
+- `POST /api/diagnose` — diagnóstico leve do processamento.
+- `POST /api/assistant` — camada explicativa opcional, exige `GEMINI_API_KEY`.
+
+## Arquitetura
+
+O processamento pesado do PDF ocorre no backend. O frontend recebe apenas o resultado JSON sanitizado.
+
+O núcleo determinístico deve permanecer independente de autenticação, banco, cobrança e IA generativa.
+
+A preparação para persistência SaaS está em `src/storage/StorageProvider.ts`, atualmente com `LocalStorageProvider`.
+
+## QA manual
+
+PDFs controlados estão em:
+
+`tests/fixtures/manual/`
+
+Use esses arquivos para smoke tests antes de publicar uma nova versão.
+
+## Documentação
+
+- `docs/BETA_READINESS.md`
+- `docs/DEPLOY.md`
